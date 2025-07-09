@@ -4,6 +4,8 @@ import threading
 import pyautogui
 import keyboard
 import mouse
+import time
+import pyperclip
 
 class MacroApp:
     def __init__(self, root):
@@ -20,7 +22,9 @@ class MacroApp:
         self.mouse_hook = None
         self.capturando = False
         self.macros_ativos = False
-        self.macro_mapping = {}  # Mapeia tecla -> frase
+        self.macro_mapping = {}
+        self.mouse_mapping = {}
+        self.executando = False
 
         for i in range(3):
             tk.Label(root, text=f"Frase {i+1}:").place(x=30, y=30 + i*70)
@@ -40,14 +44,13 @@ class MacroApp:
 
     def aguardar_tecla(self, idx):
         if self.capturando:
-            return  # Já está capturando
+            return
         self.capturando = True
         self.status_label.config(text="Pressione uma tecla ou botão do mouse...")
-        # Remove hooks antigos se existirem
-        if self.key_hook:
+        if self.key_hook is not None:
             keyboard.unhook(self.key_hook)
             self.key_hook = None
-        if self.mouse_hook:
+        if self.mouse_hook is not None:
             mouse.unhook(self.mouse_hook)
             self.mouse_hook = None
 
@@ -56,8 +59,10 @@ class MacroApp:
             self.teclas[idx].set(e.name)
             self.tecla_entries[idx].config(state='readonly')
             self.status_label.config(text=f"Tecla selecionada: {e.name}")
-            keyboard.unhook(self.key_hook)
-            mouse.unhook(self.mouse_hook)
+            if self.key_hook is not None:
+                keyboard.unhook(self.key_hook)
+            if self.mouse_hook is not None:
+                mouse.unhook(self.mouse_hook)
             self.key_hook = None
             self.mouse_hook = None
             self.capturando = False
@@ -65,17 +70,21 @@ class MacroApp:
         def on_mouse(e):
             if isinstance(e, mouse.ButtonEvent):
                 valor = e.button
+                print(f"Botão do mouse selecionado: {valor}")
                 self.status_label.config(text=f"Tecla selecionada: {valor}")
             elif isinstance(e, mouse.WheelEvent):
                 valor = 'wheel_up' if e.delta > 0 else 'wheel_down'
+                print(f"Scroll do mouse selecionado: {valor}")
                 self.status_label.config(text=f"Tecla selecionada: {valor}")
             else:
                 return
             self.tecla_entries[idx].config(state='normal')
             self.teclas[idx].set(valor)
             self.tecla_entries[idx].config(state='readonly')
-            keyboard.unhook(self.key_hook)
-            mouse.unhook(self.mouse_hook)
+            if self.key_hook is not None:
+                keyboard.unhook(self.key_hook)
+            if self.mouse_hook is not None:
+                mouse.unhook(self.mouse_hook)
             self.key_hook = None
             self.mouse_hook = None
             self.capturando = False
@@ -84,19 +93,64 @@ class MacroApp:
         self.mouse_hook = mouse.hook(on_mouse)
 
     def on_key_press(self, e):
-        if e.name in self.macro_mapping:
+        if e.name in self.macro_mapping and not self.executando:
             frase = self.macro_mapping[e.name]
-            print(f'Executando macro: /all {frase}')
+            print(f'Executando macro (teclado): /all {frase}')
+            threading.Thread(target=self.executar_macro_thread, args=(frase,), daemon=True).start()
+
+    def executar_macro_thread(self, frase):
+        if self.executando:
+            return
+        
+        self.executando = True
+        try:
+            print(f'Iniciando execução do macro: /all {frase}')
+            
+            clipboard_original = pyperclip.paste()
+            
+            time.sleep(0.01)
+            
             pyautogui.press('enter')
-            pyautogui.write('/all ')
-            pyautogui.write(frase)
+            time.sleep(0.01)
+            
+            mensagem_completa = f"/all {frase}"
+            pyperclip.copy(mensagem_completa)
+            time.sleep(0.005)
+            
+            pyautogui.hotkey('ctrl', 'v')
+            time.sleep(0.005)
+            
             pyautogui.press('enter')
+            
+            time.sleep(0.005)
+            pyperclip.copy(clipboard_original)
+            
+            print(f'Macro executado com sucesso: {mensagem_completa}')
+            
+        except Exception as e:
+            print(f'Erro ao executar macro: {e}')
+        finally:
+            self.executando = False
+
+    def on_mouse_event(self, e):
+        if isinstance(e, mouse.ButtonEvent):
+            if e.button in self.mouse_mapping and not self.executando:
+                frase = self.mouse_mapping[e.button]
+                print(f'Executando macro (mouse): /all {frase}')
+                threading.Thread(target=self.executar_macro_thread, args=(frase,), daemon=True).start()
+        elif isinstance(e, mouse.WheelEvent):
+            wheel_key = 'wheel_up' if e.delta > 0 else 'wheel_down'
+            if wheel_key in self.mouse_mapping and not self.executando:
+                frase = self.mouse_mapping[wheel_key]
+                print(f'Executando macro (scroll): /all {frase}')
+                threading.Thread(target=self.executar_macro_thread, args=(frase,), daemon=True).start()
 
     def ativar_macros(self):
         if self.macros_ativos:
-            # Desativar macros
             keyboard.unhook_all()
+            mouse.unhook_all()
             self.macro_mapping = {}
+            self.mouse_mapping = {}
             self.macros_ativos = False
             self.status_label.config(text="Macros desativadas.")
             return
@@ -106,22 +160,25 @@ class MacroApp:
         
         ativou = False
         self.macro_mapping = {}
+        self.mouse_mapping = {}
         
         for i in range(3):
             if frases[i] and teclas[i]:
                 print(f'Registrando hotkey: {teclas[i]}')
-                # Só registrar hotkeys do teclado para debug
-                if teclas[i] in ['left', 'right', 'middle', 'wheel_up', 'wheel_down']:
-                    print(f'AVISO: "{teclas[i]}" é botão do mouse. Hotkey não registrada.')
-                    messagebox.showwarning("Aviso", f'Botão do mouse "{teclas[i]}" não é suportado nesta versão de teste.')
+                
+                if teclas[i] in ['left', 'right', 'middle', 'x', 'wheel_up', 'wheel_down']:
+                    self.mouse_mapping[teclas[i]] = frases[i]
+                    ativou = True
+                    print(f'Mouse hotkey {teclas[i]} registrada com sucesso')
                 else:
                     self.macro_mapping[teclas[i]] = frases[i]
                     ativou = True
-                    print(f'Hotkey {teclas[i]} registrada com sucesso')
+                    print(f'Teclado hotkey {teclas[i]} registrada com sucesso')
         
         if ativou:
             self.macros_ativos = True
             keyboard.on_press(self.on_key_press)
+            mouse.hook(self.on_mouse_event)
             self.status_label.config(text="Macros ativadas! Pressione 'Ativar Macros' novamente para desativar.")
         else:
             self.status_label.config(text="Nenhuma macro ativada.")
